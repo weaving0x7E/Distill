@@ -1,4 +1,4 @@
-Ted Kaczynski 1995
+*Ted Kaczynski 1995*
 
 Introduction
 
