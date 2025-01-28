@@ -1,8 +1,7 @@
 译自：
 * https://jeiwan.net/posts/programming-defi-uniswap-1/
-* https://jeiwan.net/posts/programming-defi-uniswapv2-2/
-* https://jeiwan.net/posts/programming-defi-uniswapv2-3/
-* https://jeiwan.net/posts/programming-defi-uniswapv2-4/
+* https://jeiwan.net/posts/programming-defi-uniswap-2/
+* https://jeiwan.net/posts/programming-defi-uniswap-3/
 
 Author: Ivan Kuznetsov 
 
@@ -272,7 +271,7 @@ describe("getEthAmount", async () => {
 });
 ```
 如上码，当我们想耗尽流动性时我们只能得到预期的一半。
-最后再想说的是：我们最初基于准备金率的定价函数没有错。事实上，当我们交易的代币数量与储备相比非常小时，这是正确的。但要建立AMM机制，我们需要更复杂的东西。
+最后再想说的是：我们最初基于准备金率的定价函数没有错。事实上，当我们交易的token数量与储备相比非常小时，这是正确的。但要建立AMM机制，我们需要更复杂的东西。
 
 ### Swapping functions
 ```solidity
@@ -309,7 +308,7 @@ function tokenToEthSwap(uint256 _tokensSold, uint256 _minEth) public {
 这个函数用于从用户余额中获得数量为`_tokenSold`的token并发送`ethBought`数量的ether
 
 ## Conclusion
-今天就到这里！虽然还没结束，但我们做了很多。我们的exchange合约可以接受用户的流动性，以一种防止流动性枯竭的方式计算价格，并允许用户交换代币和代币。但一些重要的机制还没建立：
+今天就到这里！虽然还没结束，但我们已经做了很多。我们的exchange合约可以接受用户的流动性，以一种防止流动性枯竭的方式计算价格。但一些重要的机制还没建立：
 * 增加新的流动性会导致巨大的价格变化
 * 流动性提供者没有回报；所有交换都是免费的
 * 无法移除流动性
@@ -317,3 +316,180 @@ function tokenToEthSwap(uint256 _tokensSold, uint256 _minEth) public {
 * factory合约仍未实现
 
 我们将在未来的部分中实现这些功能！
+
+# Part 2
+## Adding more liquidity
+在之前的章节我们讨论的`addLiquidity`还没写完，这个函数目前看起来是这样的：
+```solidity
+function addLiquidity(uint256 _tokenAmount) public payable {
+  IERC20 token = IERC20(tokenAddress);
+  token.transferFrom(msg.sender, address(this), _tokenAmount);
+}
+```
+你能看它有什么问题吗？
+这个函数允许在任何时刻提供任意数量的流动性，正如我们所熟知的那样价格是以资产比例来计算的：
+$$
+P_X​=\frac{x}{y}​,P_Y​=\frac{y}{x}​
+
+$$
+当x和y是它们的资产储备量​，$P_X​$和$P_Y$代表的是ether和token的价格
+我们知道交换token时的资产储备改变不是线性的，这影响了价格，套利者通过平衡价格使其与大型中心化交易所的价格相匹配来获利。
+我们实现的问题在于它没有对价格改变的幅度进行限制，换句话说它没有强制让新的流动性也执行当前的资产比例，这将导致价格有被操纵的可能，我们希望的是去中心化交易所的价格能尽可能接近中心化交易所的价格，让exchange合约充当价格预言机的角色。
+所以我们必须确保增加流动性时不破坏原有交易池的资产比例，同时我们想允许在交易池还没初始化也即时储备为零时提供任意比例的流动性，这是一个重要的时刻，因为需要确定价格的初始值。
+现在`addLiquidity`将有两个职责：
+* 如果是为新池增加流动性，允许以任意比例提供
+* 后续为交易池提供流动性时强制以相同比例提供
+对于第一个职责在原有的代码上加个`if`就行啦
+```solidity
+if (getReserve() == 0) {
+    IERC20 token = IERC20(tokenAddress);
+    token.transferFrom(msg.sender, address(this), _tokenAmount);
+```
+第二个职责的实现如下码所示
+```solidity
+} else {
+    uint256 ethReserve = address(this).balance - msg.value;
+    uint256 tokenReserve = getReserve();
+    uint256 tokenAmount = (msg.value * tokenReserve) / ethReserve;
+    require(_tokenAmount >= tokenAmount, "insufficient token amount");
+
+    IERC20 token = IERC20(tokenAddress);
+    token.transferFrom(msg.sender, address(this), tokenAmount);
+}
+```
+唯一的区别是，我们并没有存入用户提供的所有token，而是存入与发送的ether数量相匹配的token量，如果存入的token和ether数量不匹配则拒绝此次新增的流动性，以保证新加入的资产不会破环原有交易池的资产比例。
+
+## LP-tokens
+现在我们将讨论能让Uniswap正常运作的一个关键设计
+我们需要一个机制让LP能从他们的行为中获得收益，如果没有激励制度没人愿意把自己的资产放入一个第三方合约。
+一个好方案是向每笔交易收手续费，交易者为LP提供的流动性支付一些费用把这些手续费作为LP的收益，这看起来很公平。
+为了公平的提供激励，我们需要根据LP的贡献（即他们提供的流动性数量）按比例给予奖励。如果某人提供了池流动性的 50%，那么他就应该获得手续费的 50%。这很合理，对吗？
+现在看来，这项任务相当复杂。不过，有一个优雅的解决方案： LP-tokens。
+LP-tokens基本上是向流动性提供者发行的 ERC20 token，以换取他们的流动性。事实上，LP tokens就是股票：
+1. 你可以获得LP-tokens以代表你提供的流动性
+2. 获得的LP-tokens的比例和你在池中提供的流动性成正比
+3. 手续费由持有的LP-tokens数量来按比例分配
+4. LP-tokens可以换回流动性和累计费用
+那么我们将如何根据所提供的流动性来计算发行的 LP-token数量呢？这不太容易，因为我们需要满足一些要求：
+1. 每个已发行份额必须始终正确。当有人在我之后存入或取出流动性时，我的份额必须保持正确
+2. 以太坊上的写操作（如在合约中存储新数据或更新现有数据）非常昂贵。因此，我们希望降低 LP-tokens的维护成本（即我们不想运行定期重新计算和更新份额）
+想象一下我们铸造了很多token并把他们提供给LP。如果我们总是分发所有token，那就得不停的铸造还得不停的重新计算大家的份额，那假如只释放初始token的一部分，同样有可能把token都用光导致还得重新计算份额。
+所以提供无限量token，在新流动性加入后就铸造新token才是王道。现在我们得想一个优雅的公式能让大家的份额在这种情况下也一直保持正确。
+所以，该咋办嘞？
+exchange合约存储了ether和token，所以我们应该基于它们的储备来计算。。。或者只根据它们中的一个来计算，我也不知道。Uniswap V1根据ether来计算的，但是V2版本允许了token之间的交易，所以该如何选择其实没有明确的参照。让我们继续讨论Uniswap V1的功能，稍后我们将看到当有两个ERC20时如何解决这个问题。
+这个公式表示新LP-tokens数量是如何根据存入的ether来计算的：
+$$
+amountMinted=totalAmount∗\frac{ethDeposited}{ethReserve}​
+$$
+每一次新增流动性都按比例发行LP-tokens，但这也有点问题，如果有人提供了`ethReserve`那么多的流动性那份额还正确吗？
+在修改`addLiquidity`前先让exchange合约继承ERC20
+```solidity
+contract Exchange is ERC20 {
+    address public tokenAddress;
+
+    constructor(address _token) ERC20("Zuniswap-V1", "ZUNI-V1") {
+        require(_token != address(0), "invalid token address");
+
+        tokenAddress = _token;
+    }
+```
+现在，让我们更新addLiquidity：当增加初始流动性时，发行的LP-tokens数量等于存入的ether数量。
+```solidity
+function addLiquidity(uint256 _tokenAmount)
+    public
+    payable
+    returns (uint256)
+{
+    if (getReserve() == 0) {
+        ...
+
+        uint256 liquidity = address(this).balance;
+        _mint(msg.sender, liquidity);
+
+        return liquidity;
+```
+后续将按照存入的ether按比例铸造的LP-token
+```solidity
+    } else {
+        ...
+
+        uint256 liquidity = (totalSupply() * msg.value) / ethReserve;
+        _mint(msg.sender, liquidity);
+
+        return liquidity;
+    }
+}
+```
+
+## Fees
+在收取手续费前得先思考几个问题
+* 我们的费用应该以什么方式支付，ether还是token
+* 如何从交易中收取固定费率呢
+* 如何根据比例给LP提供激励
+同样，这看似是一项艰巨的任务，但我们已经具备了解决它的一切条件。
+让我们思考一下最后两个问题。我们可以引入一种额外的付款方式，与交易一起发送。这些款项会被累积到一个基金中，任何流动性提供者都可以从中提取与其份额成正比的金额。这听起来是个合理的想法，而且令人惊讶的是，它几乎已经实现了：
+1. 交易者已经发送了ether/tokens到exchange合约，为了收费我们可以直接从合约中提取他们提供的流动性
+2. 我们的基金就是exchange合约中的储备，它可以用于累积费用，这也意味着储备将会随着时间的推移而增长，所以恒定乘积公式并不是那么恒定！然而，这并不能使它失效；和储备相比费用很小，而且没有办法操纵它来显著改变储备。
+3. 现在我们需要回答第一个问题，LP应当按比例获得ether和token以及与LP-tokens成比例的累积费用
+Uniswap的费用是0.3%，我们采用1%的比例以方便后续的测试
+```solidity
+function getAmount(
+  uint256 inputAmount,
+  uint256 inputReserve,
+  uint256 outputReserve
+) private pure returns (uint256) {
+  require(inputReserve > 0 && outputReserve > 0, "invalid reserves");
+
+  uint256 inputAmountWithFee = inputAmount * 99;
+  uint256 numerator = inputAmountWithFee * outputReserve;
+  uint256 denominator = (inputReserve * 100) + inputAmountWithFee;
+
+  return numerator / denominator;
+}
+```
+因为没法用小数除法所以我们把分子分母都扩大100倍，费用则从分子中被减去
+$$
+amountWithFee=amount∗\frac{100−fee}{100}​
+$$
+## Removing liquidity
+要移除流动性，我们可以再次使用 LP-tokens：我们不需要记住每个LP存入的金额，可以根据 LP-tokens份额计算移除的流动性金额
+```solidity
+function removeLiquidity(uint256 _amount) public returns (uint256, uint256) {
+  require(_amount > 0, "invalid amount");
+
+  uint256 ethAmount = (address(this).balance * _amount) / totalSupply();
+  uint256 tokenAmount = (getReserve() * _amount) / totalSupply();
+
+  _burn(msg.sender, _amount);
+  payable(msg.sender).transfer(ethAmount);
+  IERC20(tokenAddress).transfer(msg.sender, tokenAmount);
+
+  return (ethAmount, tokenAmount);
+}
+```
+当流动性移除时会以ether和token的形式按比例返回，但这会造成一定的折损。由于资产由美元计价。当流动性被移除时，余额可能与存入流动性时的余额不同。这意味着，LP将获得不同数量的ether和token，其总价格可能低于存入Uniswap时的价格。
+为了计算取出的流动性我们可以用储备乘以LP的LP-token份额
+$$
+removedAmount=reserve∗\frac{amountLP​}{totalAmountLP}
+$$
+在移除流动性时会销毁LP-tokens以和它的底层资产相匹配
+## LP reward and impermanent loss demonstration
+模拟一个完整的交易流程
+
+1. LP存入100 ethers和200 tokens使得1 token = 0.5 ether, 1 ether = 2 token
+```js
+exchange.addLiquidity(toWei(200), { value: toWei(100) });
+```
+2. 一个用户交换了10 ether期望至少得到18 tokens事实上他得到18.0164个，它包含了滑点和1%的费用
+```js
+exchange.connect(user).ethToTokenSwap(toWei(18), { value: toWei(10) });
+```
+3. LP随即收回流动性
+```js
+exchange.removeLiquidity(toWei(100));
+```
+4. LP得到109.9 ethers（包含费用）和181.9836 tokens，这里能看出存入的总价和取出时不同，我们得到其他交易者的10 ethers但是付出了18.0164个token 这包含了其他用户支付的1%的费用。由于LP提供了全部的流动性所以他得到全部的费用。
+
+## Conclusion
+那是一个很长的文章！希望LP-tokens对你来说不再是一个谜。
+然而，我们还没有完成：exchange合约现在已经完成，但我们还需要实现factory合约，它作为交易所的注册器和连接多个交易所的桥梁，并token-to-token成为可能。我们将在下一部分中实现它！
