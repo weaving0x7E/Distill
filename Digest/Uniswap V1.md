@@ -46,7 +46,7 @@ contract Token is ERC20 {
 }
 ```
 ## Exchange contract
-Uniswap V1只有两个合约：Factory和Exchange
+Uniswap V1只有两个合约：Factory和Exchange。
 Factory提供合约注册功能，用于创建exchange并持续追踪已部署的exchange，允许通过token地址搜索exchange地址，exchange合约通常定义了交换逻辑，每一个交易对由exchange合约部署。
 下面是一个空合约
 ```solidity
@@ -162,9 +162,9 @@ expect(await exchange.getPrice(etherReserve, tokenReserve)).to.eq(500);
 // token per ETH
 expect(await exchange.getPrice(tokenReserve, etherReserve)).to.eq(2000);
 ```
-现在1 token等于0.5 ether而1 ether 等于2 token了
-看起来好像什么问题，但是如果我们用2000 token来换取ether呢？我们会得到1000 ether，这将用尽exchange合约里的全部储备
-显然这个价格函数有点古怪，它允许用尽合约储备这是我们不想看到的。
+现在1 token等于0.5 ether而1 ether 等于2 token了。
+看起来好像什么问题，但是如果我们用2000 token来换取ether呢？我们会得到1000 ether，这将用尽exchange合约里的全部储备。
+显然这个价格函数有点古怪，它竟然允许用尽合约储备这是我们不想看到的。
 原因在于价格函数遵从恒等式它定义了`k`是个`x`与`y`的常数和，这种函数是一条直线
 ![[Pasted image 20250127161859.png]]
 在x和y轴的交点处意味着允许它们为0！我们显然不想这样。
@@ -332,7 +332,7 @@ $$
 P_X​=\frac{x}{y}​,P_Y​=\frac{y}{x}​
 
 $$
-当x和y是它们的资产储备量​，$P_X​$和$P_Y$代表的是ether和token的价格
+当x和y是它们的资产储备量​，$P_X​$和$P_Y$代表的是ether和token的价格。
 我们知道交换token时的资产储备改变不是线性的，这影响了价格，套利者通过平衡价格使其与大型中心化交易所的价格相匹配来获利。
 我们实现的问题在于它没有对价格改变的幅度进行限制，换句话说它没有强制让新的流动性也执行当前的资产比例，这将导致价格有被操纵的可能，我们希望的是去中心化交易所的价格能尽可能接近中心化交易所的价格，让exchange合约充当价格预言机的角色。
 所以我们必须确保增加流动性时不破坏原有交易池的资产比例，同时我们想允许在交易池还没初始化也即时储备为零时提供任意比例的流动性，这是一个重要的时刻，因为需要确定价格的初始值。
@@ -360,7 +360,7 @@ if (getReserve() == 0) {
 唯一的区别是，我们并没有存入用户提供的所有token，而是存入与发送的ether数量相匹配的token量，如果存入的token和ether数量不匹配则拒绝此次新增的流动性，以保证新加入的资产不会破环原有交易池的资产比例。
 
 ## LP-tokens
-现在我们将讨论能让Uniswap正常运作的一个关键设计
+现在我们将讨论能让Uniswap正常运作的一个关键设计。
 我们需要一个机制让LP能从他们的行为中获得收益，如果没有激励制度没人愿意把自己的资产放入一个第三方合约。
 一个好方案是向每笔交易收手续费，交易者为LP提供的流动性支付一些费用把这些手续费作为LP的收益，这看起来很公平。
 为了公平的提供激励，我们需要根据LP的贡献（即他们提供的流动性数量）按比例给予奖励。如果某人提供了池流动性的 50%，那么他就应该获得手续费的 50%。这很合理，对吗？
@@ -431,7 +431,7 @@ function addLiquidity(uint256 _tokenAmount)
 1. 交易者已经发送了ether/tokens到exchange合约，为了收费我们可以直接从合约中提取他们提供的流动性
 2. 我们的基金就是exchange合约中的储备，它可以用于累积费用，这也意味着储备将会随着时间的推移而增长，所以恒定乘积公式并不是那么恒定！然而，这并不能使它失效；和储备相比费用很小，而且没有办法操纵它来显著改变储备。
 3. 现在我们需要回答第一个问题，LP应当按比例获得ether和token以及与LP-tokens成比例的累积费用
-Uniswap的费用是0.3%，我们采用1%的比例以方便后续的测试
+Uniswap的费用是0.3%，我们采用1%的比例以方便后续的测试。
 ```solidity
 function getAmount(
   uint256 inputAmount,
@@ -447,12 +447,12 @@ function getAmount(
   return numerator / denominator;
 }
 ```
-因为没法用小数除法所以我们把分子分母都扩大100倍，费用则从分子中被减去
+因为没法用小数除法所以我们把分子分母都扩大100倍，费用则从分子中被减去。
 $$
 amountWithFee=amount∗\frac{100−fee}{100}​
 $$
 ## Removing liquidity
-要移除流动性，我们可以再次使用 LP-tokens：我们不需要记住每个LP存入的金额，可以根据 LP-tokens份额计算移除的流动性金额
+要移除流动性，我们可以再次使用 LP-tokens：我们不需要记住每个LP存入的金额，可以根据 LP-tokens份额计算移除的流动性金额。
 ```solidity
 function removeLiquidity(uint256 _amount) public returns (uint256, uint256) {
   require(_amount > 0, "invalid amount");
@@ -472,7 +472,7 @@ function removeLiquidity(uint256 _amount) public returns (uint256, uint256) {
 $$
 removedAmount=reserve∗\frac{amountLP​}{totalAmountLP}
 $$
-在移除流动性时会销毁LP-tokens以和它的底层资产相匹配
+在移除流动性时会销毁LP-tokens以和它的底层资产相匹配。
 ## LP reward and impermanent loss demonstration
 模拟一个完整的交易流程
 
@@ -491,5 +491,167 @@ exchange.removeLiquidity(toWei(100));
 4. LP得到109.9 ethers（包含费用）和181.9836 tokens，这里能看出存入的总价和取出时不同，我们得到其他交易者的10 ethers但是付出了18.0164个token 这包含了其他用户支付的1%的费用。由于LP提供了全部的流动性所以他得到全部的费用。
 
 ## Conclusion
-那是一个很长的文章！希望LP-tokens对你来说不再是一个谜。
-然而，我们还没有完成：exchange合约现在已经完成，但我们还需要实现factory合约，它作为交易所的注册器和连接多个交易所的桥梁，并token-to-token成为可能。我们将在下一部分中实现它！
+这是一篇很长的文章！希望LP-tokens对你来说不再是一个谜。
+然而，我们还没有写完：exchange合约现在已经完成，但我们还需要实现factory合约，它作为交易所的注册器和连接多个交易所的桥梁，并让token-to-token成为可能。我们将在下一部分中实现它！
+
+# Part 3
+## What Factory is for
+factory合约为exchange合约提供注册机制：每个新部署的exchange合约都由在factory中注册。这是个重要的机制它提供了对exchange进行搜索的基础。
+factory提供的另一个实用工具是exchange模板，这样无需处理代码，node和部署脚本就可以上线一个exchange。所以今天我们将学习一个合约如何部署另一个合约。
+Uniswap只有一个factory合约自然只有一个交易对注册表。然而没什么能阻止其他用户不通过官方factory来部署他们自己的factory甚至exchange。当这发生时这些exchange不会被Uniswap识别到当然也无法用它们在官方网站上交换token。
+## Factory implementation
+factory是一个注册表所以我们需要一个数据结构来记录exchage它将为地址做映射以允许通过token找到exchange
+```solidity
+pragma solidity ^0.8.0;
+
+import "./Exchange.sol";
+
+contract Factory {
+    mapping(address => address) public tokenToExchange;
+
+    ...
+```
+接下来`createExchange`函数将提供通过token地址来创建和部署exchange的功能
+```solidity
+function createExchange(address _tokenAddress) public returns (address) {
+  require(_tokenAddress != address(0), "invalid token address");
+  require(
+    tokenToExchange[_tokenAddress] == address(0),
+    "exchange already exists"
+  );
+
+  Exchange exchange = new Exchange(_tokenAddress);
+  tokenToExchange[_tokenAddress] = address(exchange);
+
+  return address(exchange);
+}
+```
+它进行两个检查：
+1. token 地址不是零地址（0x0000000000000000000000000000000000000000）
+2. token 还未被注册过。
+现在用token 地址实例化exchange，这需要我们导入"Exchange.sol"，这个实例化的过程类似于在OOP语言中实例化一个类，然而solidity中的`new`运算符不会实际部署合约它返回的值是合约的类型每一个合约都可以转换成一个地址。这正是我们在下一行做的事——得到新exchange的地址并存入注册表。
+为了写完这个合约我们需要实现另一个函数——`getExchange`它允许我们通过其他合约的接口查询注册表。
+```solidity
+function getExchange(address _tokenAddress) public view returns (address) {
+  return tokenToExchange[_tokenAddress];
+}
+```
+factory就写完啦，真的太简单辣。
+现在我们得改造exchange合约使得它能用factory来提供token-to-token的功能。
+首先我们需要连接exchange和factory因为每一个exchange都需要知道factory的地址以外我们不想硬编码。所以得让合约变得更灵活些。为了连接exchagne和factory我们需要增加一个新的状态变量它存储着factory的地址。
+```solidity
+contract Exchange is ERC20 {
+    address public tokenAddress;
+    address public factoryAddress; // <--- new line
+
+    constructor(address _token) ERC20("Zuniswap-V1", "ZUNI-V1") {
+        require(_token != address(0), "invalid token address");
+
+        tokenAddress = _token;
+        factoryAddress = msg.sender;  // <--- new line
+
+    }
+    ...
+}
+```
+## Token-to-token swaps
+如何通过注册表实现token-to-token？
+1. 创建一个标准的token-to-ether交易对
+2. 不把ether发送给用户而是发给用户提供的一个exchange
+3. 如果这个exchange存在则发送ether到exchange中以交换token
+4. 返回交换后的token给用户
+看起来合理，对吗？现在来实现它吧
+```solidity
+// Exchange.sol
+
+function tokenToTokenSwap(
+    uint256 _tokensSold,
+    uint256 _minTokensBought,
+    address _tokenAddress
+) public {
+    ...
+```
+这个函数接受三个参数，售卖的token数量，允许exchange返回的最低token数量，期望返回的token地址。
+我们首先检查用户提供的token是否已经有exchange，如果未找到则抛出错误。
+```solidity
+address exchangeAddress = IFactory(factoryAddress).getExchange(
+    _tokenAddress
+);
+require(
+    exchangeAddress != address(this) && exchangeAddress != address(0),
+    "invalid exchange address"
+);
+```
+我们使用`IFactory`它是factory的接口，在与其他合约交互时使用接口是一个良好的编程实践。然而接口不允许访问状态变量这就是为什么我们在factory中实现`getExchange`函数，现在我们可以通过这个接口来访问facroty合约。
+```solidity
+interface IFactory {
+  function getExchange(address _tokenAddress) external returns (address);
+}
+```
+接下来我们用当前的exchange来用token交换ether并把用户的token发送到exchagne
+```solidity
+uint256 tokenReserve = getReserve();
+uint256 ethBought = getAmount(
+    _tokensSold,
+    tokenReserve,
+    address(this).balance
+);
+
+IERC20(tokenAddress).transferFrom(
+    msg.sender,
+    address(this),
+    _tokensSold
+);
+```
+最后一步时使用其他exchange来用ether换回token
+```solidity
+IExchange(exchangeAddress).ethToTokenSwap{value: ethBought}(
+    _minTokensBought
+);
+```
+这就行了！
+发现问题了吗？看看`etherToTokenSwap`的最后一行
+```solidity
+IERC20(tokenAddress).transfer(msg.sender, tokensBought);
+```
+它发送购回的token给msg.sender。在solidity中msg.sender是动态的它指向发送这个调用的Account或者Contract。当用户调用合约函数它将指向用户的地址但是当合约调用其他合约时msg.sender指向合约。
+由此`tokenToTokenSwap`会把token发到第一个exchange，我们可以再调用`ERC20(_tokenAddress).transfer(...)`来解决这个问题，但是有一个更优雅的方法：直接把token发给用户这样还能节约一些gas。为此我们需要把`etherToTokenSwap`分成两个函数
+```solidity
+function ethToToken(uint256 _minTokens, address recipient) private {
+  uint256 tokenReserve = getReserve();
+  uint256 tokensBought = getAmount(
+    msg.value,
+    address(this).balance - msg.value,
+    tokenReserve
+  );
+
+  require(tokensBought >= _minTokens, "insufficient output amount");
+
+  IERC20(tokenAddress).transfer(recipient, tokensBought);
+}
+
+function ethToTokenSwap(uint256 _minTokens) public payable {
+  ethToToken(_minTokens, msg.sender);
+}
+```
+`ethToToken`新增一个接受方地址作为参数，它使得我们能灵活选择要把token发给谁。
+现在，我们需要另一个函数来向自定义接受方地址。
+```solidity
+function ethToTokenTransfer(uint256 _minTokens, address _recipient)
+  public
+  payable
+{
+  ethToToken(_minTokens, _recipient);
+}
+```
+再给`ethToToken`包装一层作为token-to-token的方法
+```solidity
+    ...
+
+    IExchange(exchangeAddress).ethToTokenTransfer{value: ethBought}(
+        _minTokensBought,
+        msg.sender
+    );
+}
+```
+搞定！
