@@ -348,6 +348,7 @@ function swap(
 $$
 	amountIn=\frac{amountOut×reserveIn}{reserveOut−amountOut}​×\frac{1000}{997}​
 $$
+	
 	也就是说交易者需要在调用`swap`前至少存入amountIn这么多的token
 ## Re-entrancy attacks and protection
 可重入攻击是ETH智能合约中最常见的攻击方法，当合约发起外部调用但没做必要的检查或更新状态时可能会给攻击者留下机会。使得攻击者可以在合约处于错误的状态时再次进入合约导致资金损失。
@@ -740,7 +741,7 @@ pairAddress = address(
 1. 先给token排序一下，还记得`createPair`函数吗？我们用排序后的token地址作为盐
 2. 接下来构建字节序列 
 * `0xff`用来避免和`CREATE`冲突
-	引用自EIP-1014：`CREATE2`endowment, memory_start, memory_length, salt这4个栈参数来生成，除了生成地址的方式为`keccak256( 0xff ++ address ++ salt ++ keccak256(init_code))[12:]`外其余行为与`CREATE(0xf0)`相同。
+>引用自EIP-1014：`CREATE2`endowment, memory_start, memory_length, salt这4个栈参数来生成，除了生成地址的方式为`keccak256( 0xff ++ address ++ salt ++ keccak256(init_code))[12:]`外其余行为与`CREATE(0xf0)`相同。
 * `factoryAddress`用于部署pair的factory地址
 * `salt`排序并哈希后的token地址
 * `pair.createCode`的字节码哈希
