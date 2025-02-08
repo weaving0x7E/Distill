@@ -24,9 +24,11 @@ Uniswap可以当作二级市场来通过不同交易所间的币对价差来套�
 ## Constant product market maker
 自动做市商是一个总称，包含了不同的去中心化做市商算法。最受欢迎的（和那些产生了这个词的）是与预测市场有关的——市场允许从预测中获利。Uniswap和其他链上交易所是这些算法的延续。
 Uniswap的核心恒等式是
+
 $$
 x∗y=k
 $$
+
 x是ether储备y是token储备k是常量。Uniswap需要k保持恒定无论x与y的储备如何。当你用ether交易其他币对时你存入ether到合约中并得到一定数量的token。Uniswap确保在交换后k不变（但这也不绝对）。这个公式也负责价格计算，下文将详述这一机制。
 
 ## Token contract
@@ -104,10 +106,11 @@ describe("addLiquidity", async () => {
 
 ### Pricing function
 现在我们想一下如何计算交换价格，一个朴素的想法也许是这样直接把价格和储备挂钩
-$$
-P_X​=\frac{x}{y}​,P_Y​=\frac{y}{x}​
 
 $$
+P_X​=\frac{x}{y}​,P_Y​=\frac{y}{x}​
+$$
+
 这有点道理因为exchange合约不和中心化交易所或者任何外部价格预言机交互，所以它不可能知道正确的价格，所以exchange合约本身就应当是一个价格预言机。它只能利用ether和token储备，这是我们计算价格的唯一信息。
 由此写一个价格函数吧：
 ```solidity
@@ -171,18 +174,24 @@ expect(await exchange.getPrice(tokenReserve, etherReserve)).to.eq(2000);
 
 ### Correct pricing function
 回忆一下Uniswap是一个恒定乘积做市商（constant product market maker）这意味着它基于恒定乘积公式：
+
 $$
 x∗y=k
 $$
+
 这个公式能产生更好价格函数吗？
 公式表明无论储备是多少，`k`都应保持不变。每笔交易都会增减ether或token的储备——让我们把这个逻辑放这个公式中：
+
 $$
 (x+Δx)(y−Δy)=xy
 $$
+
 Δx、Δy代表原始token和换得token的数量，从上式可得
+
 $$
 Δy=\frac{yΔx}{x+Δx}​
 $$
+
 现在函数关注于数量而不是价格
 ```solidity
 function getAmount(
@@ -328,10 +337,11 @@ function addLiquidity(uint256 _tokenAmount) public payable {
 ```
 你能看它有什么问题吗？
 这个函数允许在任何时刻提供任意数量的流动性，正如我们所熟知的那样价格是以资产比例来计算的：
-$$
-P_X​=\frac{x}{y}​,P_Y​=\frac{y}{x}​
 
 $$
+P_X​=\frac{x}{y}​,P_Y​=\frac{y}{x}​
+$$
+
 当x和y是它们的资产储备量​，$P_X​$和$P_Y$代表的是ether和token的价格。
 我们知道交换token时的资产储备改变不是线性的，这影响了价格，套利者通过平衡价格使其与大型中心化交易所的价格相匹配来获利。
 我们实现的问题在于它没有对价格改变的幅度进行限制，换句话说它没有强制让新的流动性也执行当前的资产比例，这将导致价格有被操纵的可能，我们希望的是去中心化交易所的价格能尽可能接近中心化交易所的价格，让exchange合约充当价格预言机的角色。
@@ -378,9 +388,11 @@ LP-tokens基本上是向流动性提供者发行的 ERC20 token，以换取他�
 所以，该咋办嘞？
 exchange合约存储了ether和token，所以我们应该基于它们的储备来计算。。。或者只根据它们中的一个来计算，我也不知道。Uniswap V1根据ether来计算的，但是V2版本允许了token之间的交易，所以该如何选择其实没有明确的参照。让我们继续讨论Uniswap V1的功能，稍后我们将看到当有两个ERC20时如何解决这个问题。
 这个公式表示新LP-tokens数量是如何根据存入的ether来计算的：
+
 $$
 amountMinted=totalAmount∗\frac{ethDeposited}{ethReserve}​
 $$
+
 每一次新增流动性都按比例发行LP-tokens，但这也有点问题，如果有人提供了`ethReserve`那么多的流动性那份额还正确吗？
 在修改`addLiquidity`前先让exchange合约继承ERC20
 ```solidity
@@ -448,9 +460,11 @@ function getAmount(
 }
 ```
 因为没法用小数除法所以我们把分子分母都扩大100倍，费用则从分子中被减去。
+
 $$
 amountWithFee=amount∗\frac{100−fee}{100}​
 $$
+
 ## Removing liquidity
 要移除流动性，我们可以再次使用 LP-tokens：我们不需要记住每个LP存入的金额，可以根据 LP-tokens份额计算移除的流动性金额。
 ```solidity
@@ -469,9 +483,11 @@ function removeLiquidity(uint256 _amount) public returns (uint256, uint256) {
 ```
 当流动性移除时会以ether和token的形式按比例返回，但这会造成一定的折损。由于资产由美元计价。当流动性被移除时，余额可能与存入流动性时的余额不同。这意味着，LP将获得不同数量的ether和token，其总价格可能低于存入Uniswap时的价格。
 为了计算取出的流动性我们可以用储备乘以LP的LP-token份额
+
 $$
 removedAmount=reserve∗\frac{amountLP​}{totalAmountLP}
 $$
+
 在移除流动性时会销毁LP-tokens以和它的底层资产相匹配。
 ## LP reward and impermanent loss demonstration
 模拟一个完整的交易流程

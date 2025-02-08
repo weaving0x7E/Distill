@@ -76,17 +76,21 @@ function mint() public {
 我们首先计算新存入的金额然后计算需要发送给LP的LP-token数量最后发送token并更新储备(`_update`把balance更新到reserve变量中）。
 从代码中可以看出池的状态不同时流动性的计算方法也是不同的(`totalSupply == 0`)。那么问题来了，当池中没有流动性时得铸造多少LP-token呢？在Uniswap V1中这取决于存入的ether数量，它使得初始LP-token数量取决于初始存入的资产比例，也就是说没有一个在一开始就可以纠偏价格的机制。此外Uniswap V2现在支持任意ERC20 pair，这意味着单纯的依赖ETH来计价已不可能。
 对于初始的LP-token数量Uniswap V2使用存入资产的几何平均数来计算：
+
 $$
 Liquidity_{minted}=\sqrt{Amount_{0}​∗Amount_{1}}​​
 $$
+
 这样的好处在于初始的资产比例不会影响池中份额的价值。
 现在让我们看看对于已有流动性的池LP-token该如何计算，显然这种算法要满足两个条件：
 1. 与存入的资产成比例
 2. 与已发行的LP-token成比例
 回忆一下V1中的公式：
+
 $$
 Liquidity_{minted​}=TotalSupply_{LP}​∗\frac{Amount_{deposited}}{Reserve}​​
 $$
+
 新LPtoken的数量和存入的ether成比例但是在V2中有两个底层token，我们该把哪个用到公式中呢？
 我们可以选择任意一个，一个值得注意的现象是：存入资产的比例与储备资产的比例越接近，所引起的价格变更就越小，因此如果存入的两种资产的比例失衡，那么根据某一资产算得LP-token的数量也会不同，如果选择占比大的这将通过提供流动性的方法激励价格变更从而导致可能的价格操纵，如果选择占比小的意味着惩罚失衡的流动性（LP将获得更少的LP-token）。显然选择占比小的资产有助于价格的公允性。
 ```solidity
@@ -173,9 +177,11 @@ function testMintUnbalanced() public {
 和之前谈到的一样即便提供多余的`token0`也只能得到1 LP-token
 ## Removing liquidity
 从池中移除流动性意味着销毁LP-token，以换取相应数量的底层token，返还的token数量计算方式如下：
+
 $$
 Amount_{token}​=Reserve_{token}​∗\frac{​Balance_{LP}}{TotalSupply_{LP}}​​
 $$
+
 返还的token数量与持有的LP-token占比呈对应比例。持有的LP-token越多自然在销毁返还的token越多。
 burn function：
 ```solidity
@@ -364,12 +370,16 @@ $$
 Uniswap既是一个链上应用也可以作为一个预言机。每个Uniswap pair合约的广泛使用也吸引着套利者通过其与交易所之间的差价来获利。套利者使得Uniswap的价格和中心化交易所的价格尽可能的接近，这也可以被看做中心化交易所的价格反馈给区块链。现在这个桥梁已经建立，来看看Uniswap V2是怎么利用这个现象的吧。
 Uniswap V2中价格预言机提供的价格被称为时间加权平均价（time-weighted average price）或者TWAP。它提供两个时刻间的平均价格。为了做到这一点，合约存储了累积的价格：在每次swap之前它计算当前边际价格（不包含费用），乘以自上次交换以来的秒数，并将结果与之前的价格做和。
 边际价格指的是两种资产的储备比值：
+
 $$
 price_0​=\frac{​reserve_1}{reserve_0}
-$$​​OR
+$$
+​​OR
+
 $$
 price_1​=\frac{​reserve_0}{reserve_1}
 $$
+
 对于预言机功能Uniswap V2使用的边际价格它不包含滑点和交换费用，也不依赖交换的数量。
 由于Solidity不支持浮点数除法，计算这种价格有点麻烦：比如说储量比是$\frac{2}{3}$，那价格就是0。所以我们需要在计算边际价格时增加小数点，Uniswap V2使用[UQ112.112 number](https://en.wikipedia.org/wiki/Q_%28number_format%29)来处理这种情况。
 UQ112.112简单讲就是用112个bit存储小数部分112个bit存储整数部分。之所以使用`uint112`是为了优化存储效率（这将在下一节详细介绍）。储备量被保存在UQ112.112的整数部分，这就是为什么要在计算价格前乘以`2**112`，具体细节可以看`UQ112x112.sol`。
@@ -431,13 +441,17 @@ uint256 public price1CumulativeLast;
 ## Integer overflow and underflow
 现在再来审视`unchecked`中的代码。
 另一个在合约中常见的漏洞是整数溢出或下溢。`uint256`的最大值是2<sup>256</sup>-1最小值是0.整数溢出意味着在`uint256`的最大值上继续增加导致它从0开始重新计数。
+
 $$
 uint256(2^{256}−1)+1=0
 $$
+
 类似的从零减去减一也会导致从最大值重新计数
+
 $$
 uint256(0)−1=2^{256}−1
 $$
+
 在Soldity 0.8以前不会对溢出或下溢进行检查，开发者一般使用SafeMath来应对这些问题，但现在Solidity原生支持在溢出或下溢时抛出异常。
 0.8版本也引入了`uncheched`它意味着关闭对应代码的溢出/下溢检查。
 我们在使用`timeElapsed`来计算累积价格时使用`unchecked`，这看起来似乎降低了安全性，但是即使我们的计算结果溢出时这也不会破坏合约的正常运行，所以在此处使用`unchecked`是安全的。
@@ -741,7 +755,7 @@ pairAddress = address(
 1. 先给token排序一下，还记得`createPair`函数吗？我们用排序后的token地址作为盐
 2. 接下来构建字节序列 
 * `0xff`用来避免和`CREATE`冲突
->引用自EIP-1014：`CREATE2`endowment, memory_start, memory_length, salt这4个栈参数来生成，除了生成地址的方式为`keccak256( 0xff ++ address ++ salt ++ keccak256(init_code))[12:]`外其余行为与`CREATE(0xf0)`相同。
+>引用自EIP-1014：`CREATE2`用endowment, memory_start, memory_length, salt这4个栈参数来执行，除了生成地址的方式为`keccak256( 0xff ++ address ++ salt ++ keccak256(init_code))[12:]`外其余行为与`CREATE(0xf0)`相同。
 * `factoryAddress`用于部署pair的factory地址
 * `salt`排序并哈希后的token地址
 * `pair.createCode`的字节码哈希
