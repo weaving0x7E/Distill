@@ -320,7 +320,7 @@ function tokenToEthSwap(uint256 _tokensSold, uint256 _minEth) public {
 今天就到这里！虽然还没结束，但我们已经做了很多。我们的exchange合约可以接受用户的流动性，以一种防止流动性枯竭的方式计算价格。但一些重要的机制还没建立：
 * 增加新的流动性会导致巨大的价格变化
 * 流动性提供者没有回报；所有交换都是免费的
-* 无法移除流动性
+* 无法收回流动性
 * 无法交换 ERC20
 * factory合约仍未实现
 
@@ -466,7 +466,7 @@ amountWithFee=amount∗\frac{100−fee}{100}​
 $$
 
 ## Removing liquidity
-要移除流动性，我们可以再次使用 LP-tokens：我们不需要记住每个LP存入的金额，可以根据 LP-tokens份额计算移除的流动性金额。
+要收回流动性，我们可以再次使用 LP-tokens：我们不需要记住每个LP存入的金额，可以根据 LP-tokens份额计算收回的流动性数量。
 ```solidity
 function removeLiquidity(uint256 _amount) public returns (uint256, uint256) {
   require(_amount > 0, "invalid amount");
@@ -481,14 +481,14 @@ function removeLiquidity(uint256 _amount) public returns (uint256, uint256) {
   return (ethAmount, tokenAmount);
 }
 ```
-当流动性移除时会以ether和token的形式按比例返回，但这会造成一定的折损。由于资产由美元计价。当流动性被移除时，余额可能与存入流动性时的余额不同。这意味着，LP将获得不同数量的ether和token，其总价格可能低于存入Uniswap时的价格。
+当流动性收回时会以ether和token的形式按比例返回，但这会造成一定的折损。由于资产由美元计价。当流动性被收回时，余额可能与存入流动性时的余额不同。这意味着，LP将获得不同数量的ether和token，其总价格可能低于存入Uniswap时的价格。
 为了计算取出的流动性我们可以用储备乘以LP的LP-token份额
 
 $$
 removedAmount=reserve∗\frac{amountLP​}{totalAmountLP}
 $$
 
-在移除流动性时会销毁LP-tokens以和它的底层资产相匹配。
+在收回流动性时会销毁LP-tokens以和它的底层资产相匹配。
 ## LP reward and impermanent loss demonstration
 模拟一个完整的交易流程
 

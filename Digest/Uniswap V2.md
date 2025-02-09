@@ -46,7 +46,7 @@ contract ZuniswapV2Pair is ERC20, Math {
   ...
 }
 ```
-如果你熟悉[[Uniswap V1]]，你也许记得我们实现了`addLiquidity`函数它计量了新加入的流动性并铸造LP-token。Uniswap V2在periphery合约中用`UniswapV2Router`实现了相同的功能。在pair合约中这些功能以一种更底层的方式被实现：流动性管理被简单的视为对LP-token的管理。当你向pair中增加流动性时合约会铸造LP-token。当你移除流动性时LP-token被销毁。就像之前谈论的那样core合约是一个底层合约它只负责最核心的操作。
+如果你熟悉[[Uniswap V1]]，你也许记得我们实现了`addLiquidity`函数它计量了新加入的流动性并铸造LP-token。Uniswap V2在periphery合约中用`UniswapV2Router`实现了相同的功能。在pair合约中这些功能以一种更底层的方式被实现：流动性管理被简单的视为对LP-token的管理。当你向pair中增加流动性时合约会铸造LP-token。当你收回流动性时LP-token被销毁。就像之前谈论的那样core合约是一个底层合约它只负责最核心的操作。
 以下是存入流动性的底层函数：
 ```solidity
 function mint() public {
@@ -176,7 +176,7 @@ function testMintUnbalanced() public {
 ```
 和之前谈到的一样即便提供多余的`token0`也只能得到1 LP-token
 ## Removing liquidity
-从池中移除流动性意味着销毁LP-token，以换取相应数量的底层token，返还的token数量计算方式如下：
+从池中收回流动性意味着销毁LP-token，以换取相应数量的底层token，返还的token数量计算方式如下：
 
 $$
 Amount_{token}​=Reserve_{token}​∗\frac{​Balance_{LP}}{TotalSupply_{LP}}​​
@@ -226,7 +226,7 @@ function testBurn() public {
 }
 ```
 可以看到池基本回到了初始状态，除了0地址里的那1000 wei
-当提供失衡的流动性后再移除会发生什么？
+当提供失衡的流动性后再收回会发生什么？
 ```solidity
 function testBurnUnbalanced() public {
   token0.transfer(address(pair), 1 ether);
@@ -374,6 +374,7 @@ Uniswap V2中价格预言机提供的价格被称为时间加权平均价（time
 $$
 price_0​=\frac{​reserve_1}{reserve_0}
 $$
+
 ​​OR
 
 $$
@@ -570,7 +571,7 @@ function initialize(address token0_, address token1_) public {
 3. 发出`PairCreated`事件
 ## Router contract
 现在是时候打开新篇章了，我们将要实现`Router`合约。
-`Router`是一个顶层合约用作大多数用户应用的入口。这个合约使得创建pair，新增或者移除流动性，计算swap价格变化和执行swap变得更方便。`Router`也由factory部署，和pair一样这也是一个通用合约。
+`Router`是一个顶层合约用作大多数用户应用的入口。这个合约使得创建pair，新增或者收回流动性，计算swap价格变化和执行swap变得更方便。`Router`也由factory部署，和pair一样这也是一个通用合约。
 	这也是一个工程量比较大的合约，我们不实现它的所有功能，因为它们大多都是swap的变种。
 和`Router`一起实现的还有`Library`合约它实现了所有基础且核心的函数，其中大部分是对swap数量进行的交换。
 ```solidity
@@ -775,3 +776,34 @@ function quote(
 ```
 如前所述，该函数根据输入量和pair的储备计算输出量。这样，我们就可以知道用特定数量的tokenA换取多少tokenB。这个方式仅用于流动性计算，在swap中还是使用恒定乘积公式。
 今天就到这里！
+
+# Part 4
+终于到本文的最后一部分了，没错我们已经几乎从零实现了Uniswap V2，不过今天我们还要继续完善一些细节。
+## LP-tokens burning bug
+为了理解这个bug我们先看一下这个测试
+```solidity
+function testBurn() public {
+    token0.transfer(address(pair), 1 ether);
+    token1.transfer(address(pair), 1 ether);
+
+    pair.mint(address(this));
+    pair.burn();
+
+    assertEq(pair.balanceOf(address(this)), 0);
+}
+```
+当用户提供了流动性到pool时他们得到了LP-token作为回报。当流动性收回时LP-token用于换回流动性并销毁。在测试中你可以看到我们没有把LP-token放回池中，但是仍然能被销毁。如果仔细查看`burn`能发现这样的一行代码。
+```solidity
+_burn(msg.sender, liquidity);
+```
+合约在未经明确许可的前提下销毁sender的token！这显然不正确。用户需要一个方法来明确告知合约应当销毁多少token：
+1. 让用户发送一定量的LP-token到合约中
+2. 让合约只能销毁自身的LP-token
+你可以通过这个[commit](https://github.com/Jeiwan/zuniswapv2/commit/babf8509b8be96796e2d944710bfcb22cc1fe77d#diff-835d3f34100b5508951336ba5a961932492eaa6923e3c5299f77007019bf2b6fR84)找到对应的更正实现
+现在我们该实现`Router`中收回流动性的方法了。
+## Liquidity removal
+`Router`合约是一个顶层合约用于让Uniswap更易用。由此它的函数往往需要执行多个操作。现在我们需要这样一个函数：
+1. 用token抽象出pairs-user之间的操作
+2. 用户需要能指定转入pair合约的LP-token数量
+3. 让LP能从pair中收回流动性
+4. 收回流动性时减轻滑点的影响
