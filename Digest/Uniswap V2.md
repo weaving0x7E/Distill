@@ -803,7 +803,453 @@ _burn(msg.sender, liquidity);
 现在我们该实现`Router`中收回流动性的方法了。
 ## Liquidity removal
 `Router`合约是一个顶层合约用于让Uniswap更易用。由此它的函数往往需要执行多个操作。现在我们需要这样一个函数：
-1. 用token抽象出pairs-user之间的操作
+1. 给用户提供用token操作的接口，而不是pair
 2. 用户需要能指定转入pair合约的LP-token数量
 3. 让LP能从pair中收回流动性
 4. 收回流动性时减轻滑点的影响
+```solidity
+function removeLiquidity(
+    address tokenA,
+    address tokenB,
+    uint256 liquidity,
+    uint256 amountAMin,
+    uint256 amountBMin,
+    address to
+) public returns (uint256 amountA, uint256 amountB) {
+  ...
+```
+* `tokenA`, `tokenB`是pair中的token的地址，由于用户使用token操作自然无需pair的地址
+* `liquidity`是要销毁的LP-token数量
+* `amountAMin`, `amountBMin`是要收回的tokenA和tokenB的最低数量，这个参数用来避免滑点
+* `to`接收token的地址
+```solidity
+address pair = ZuniswapV2Library.pairFor(
+    address(factory),
+    tokenA,
+    tokenB
+);
+```
+首先找到pair
+```solidity
+IZuniswapV2Pair(pair).transferFrom(msg.sender, pair, liquidity);
+(amountA, amountB) = IZuniswapV2Pair(pair).burn(to);
+```
+再发送LP-token到pair并精确销毁这么多数量的token
+```solidity
+if (amountA < amountAMin) revert InsufficientAAmount();
+if (amountB < amountBMin) revert InsufficientBAmount();
+```
+最后检查返回的token数量是否满足用户能接受的滑点范围
+就这么简单~
+## Output amount calculation
+现在我们几乎可以实现高级swap了，包含chained swaping(通过TokenB来用TokenA换得TokenC)。在实现之前我们得先了解Uniswap如何计算输出量。首先看一下数量和价格的相关性。
+什么是价格？朴素的定义是换得一单位某物所要付出的成本。在恒定乘积交易所中价格是储备之间的一种关系。我们在`quote`中实现了价格计算，然而当真正swap时这个价格是错误的，因为它只代表储备之间在那个时刻的关系。但当swap完成时储备会发生改变，我们真正期望的是在储备发生变化后价格会下降。
+为了解释上面的结论，我们先回忆一下恒定乘积公式：
+
+$$
+x∗y=k
+$$
+
+$x$与$y$代表pair的储备（`reserve0`与`reserve1`）
+当swap时$x$和$y$会改变但$k$恒定（由于交易费用的原因它实际上是缓慢增加的），我们可以写成另一个式子：
+
+$$
+(x+rΔx)(y−Δy)=xy
+$$
+
+`r=1-swap fee（1-0.3%=0.997`，$Δx$是为$Δy$付出的成本。
+这个简洁的公式指明swap前后的储备乘积应当相同，我们也能借此计算Δy也就是我们能得到的token数量：
+
+$$
+Δy=\frac{yrΔx}{x+rΔx}​
+$$
+
+也就是说$Δy$受到用户的付出的$(rΔx)$影响。
+现在来看看怎么实现吧
+```solidity
+function getAmountOut(
+    uint256 amountIn,
+    uint256 reserveIn,
+    uint256 reserveOut
+) public pure returns (uint256) {
+  if (amountIn == 0) revert InsufficientAmount();
+  if (reserveIn == 0 || reserveOut == 0) revert InsufficientLiquidity();
+  ...
+```
+`amountIn`指代$Δx$, `reserveIn`指代$x$, `reserveOut`指代$y$
+```solidity
+uint256 amountInWithFee = amountIn * 997;
+uint256 numerator = amountInWithFee * reserveOut;
+uint256 denominator = (reserveIn * 1000) + amountInWithFee;
+
+return numerator / denominator;
+```
+和以前一样还是把分母乘1000，分子乘(1000-3)，算得$Δy$
+## swapExactTokensForTokens
+```solidity
+function swapExactTokensForTokens(
+    uint256 amountIn,
+    uint256 amountOutMin,
+    address[] calldata path,
+    address to
+) public returns (uint256[] memory amounts) {
+  ...
+```
+这个函数通过明确的成本(`amountIn`)来换得不少于`amountOutMin`的token。`path`则指定chained swap的swap顺序。
+`path`参数也许看起来比较复杂，这是一个数组形式的token地址。如果我们想要用TokenA换TokenB，那`path`中自然只包含TokenA和TokenB的地址。如果我们像通过TokenB来用TokenA换TokenC，那`path`中则包含TokenA、TokenB、TokenC的地址，合约将会用TokenA换得TokenB然后再用TokenB换得TokenC，这个过程我们将会在接下来的测试中看到。
+在这个函数中我们使用path预计算所有token的产生的交易量
+```solidity
+amounts = ZuniswapV2Library.getAmountsOut(
+    address(factory),
+    amountIn,
+    path
+);
+```
+`getAmountsOut`（注意这里是复数amounts）是一个我们还未实现的新函数，在这里我不会解释它的具体实现只对它做出简要定义，具体的实现你可以自行查阅对应代码。这个函数从path中提取pair并迭代的调用`getAmountOut`并为它们构建一个数组形式的输出量结果。
+
+```solidity
+if (amounts[amounts.length - 1] < amountOutMin)
+    revert InsufficientOutputAmount();
+```
+在获得输出量后我们立刻可以验证最终输出量
+```solidity
+_safeTransferFrom(
+    path[0],
+    msg.sender,
+    ZuniswapV2Library.pairFor(address(factory), path[0], path[1]),
+    amounts[0]
+);
+```
+如果最后的数量没问题，那合约将通过发送输入的token到第一个pair来启动swap
+```solidity
+_swap(amounts, path, to);
+```
+然后执行chained swap
+```solidity
+function _swap(
+    uint256[] memory amounts,
+    address[] memory path,
+    address to_
+) internal {
+    for (uint256 i; i < path.length - 1; i++) {
+      ...
+```
+开始迭代path进行交换
+```solidity
+(address input, address output) = (path[i], path[i + 1]);
+(address token0, ) = ZuniswapV2Library.sortTokens(input, output);
+```
+从path中取回当前和下一个token地址并排序，之所以这么做是应为在pair中token按地址升序存储，但在path中这些token是按交易顺序排列的，输入token在前输出token在后，中间是零或多个媒介token。
+```solidity
+uint256 amountOut = amounts[i + 1];
+(uint256 amount0Out, uint256 amount1Out) = input == token0
+    ? (uint256(0), amountOut)
+    : (amountOut, uint256(0));
+```
+如果`input==token0`则表示输入的是`token0`那自然输出的就是`token1`反之亦然。
+处理完输出量后我们需要找到第一个swap目的地址，我们有两个选项：
+1. 如果现在的pair不包含最后的path元素，那我们想直接发送token到下一个pair中以节约gas
+2. 如果现在的pair包含最后的path元素，那我们要发送token到`to_`中。
+```solidity
+address to = i < path.length - 2
+    ? ZuniswapV2Library.pairFor(
+        address(factory),
+        output,
+        path[i + 2]
+    )
+    : to_;
+```
+在获得所有swap参数后开始实际执行swap
+```solidity
+IZuniswapV2Pair(
+    ZuniswapV2Library.pairFor(address(factory), input, output)
+).swap(amount0Out, amount1Out, to, "");
+```
+我们刚刚实现的就是Uniswap的核心功能！这其实并不是很艰难，对吧？
+## swapTokensForExactTokens
+原始的`Router`合约实现了[很多不同的swap方式](https://github.com/Uniswap/v2-periphery/blob/master/contracts/UniswapV2Router02.sol#L224-L400)，我们不打算把它们全实现一遍，我只想向你演示如何实现反向swap：用未知数量的输入token来获得特定数量的输出token。这是一个虽然不常见但很有趣的用例。
+我们首先看一下swap公式：
+
+$$
+(x+rΔx)(y−Δy)=xy
+$$
+
+求解$Δx$的过程就是反向swap的过程
+
+$$
+Δx=\frac{xΔy}{(y−Δy)r}​
+$$
+
+根据这个公式写出代码
+```solidity
+function getAmountIn(
+    uint256 amountOut,
+    uint256 reserveIn,
+    uint256 reserveOut
+) public pure returns (uint256) {
+    if (amountOut == 0) revert InsufficientAmount();
+    if (reserveIn == 0 || reserveOut == 0) revert InsufficientLiquidity();
+
+    uint256 numerator = reserveIn * amountOut * 1000;
+    uint256 denominator = (reserveOut - amountOut) * 997;
+
+    return (numerator / denominator) + 1;
+}
+```
+一切看起来都比较熟悉，除了最后结果中的`+1`，这是由于在Solidity中的整数除法是向下取整的，我们希望计算出的输出量能达到要求的`amountOut`，如果最后结果被取整了，那输出量自然会略小一些。
+接下来是`getAmountsIn`函数
+```solidity
+function getAmountsIn(
+    address factory,
+    uint256 amountOut,
+    address[] memory path
+) public returns (uint256[] memory) {
+    if (path.length < 2) revert InvalidPath();
+    uint256[] memory amounts = new uint256[](path.length);
+    amounts[amounts.length - 1] = amountOut;
+
+    for (uint256 i = path.length - 1; i > 0; i--) {
+        (uint256 reserve0, uint256 reserve1) = getReserves(
+            factory,
+            path[i - 1],
+            path[i]
+        );
+        amounts[i - 1] = getAmountIn(amounts[i], reserve0, reserve1);
+    }
+
+    return amounts;
+}
+```
+相比于`getAmountsOut`这个函数的改动在于：path现在是反向遍历的。由于我们已知输出量想求解输入量，我们从path的末尾开始反向填充`amount`数组。
+顶层的swap函数看起来也很熟悉：
+```solidity
+function swapTokensForExactTokens(
+    uint256 amountOut,
+    uint256 amountInMax,
+    address[] calldata path,
+    address to
+) public returns (uint256[] memory amounts) {
+    amounts = ZuniswapV2Library.getAmountsIn(
+        address(factory),
+        amountOut,
+        path
+    );
+    if (amounts[amounts.length - 1] > amountInMax)
+        revert ExcessiveInputAmount();
+    _safeTransferFrom(
+        path[0],
+        msg.sender,
+        ZuniswapV2Library.pairFor(address(factory), path[0], path[1]),
+        amounts[0]
+    );
+    _swap(amounts, path, to);
+}
+```
+这几乎与我们之前实现的那个相同，不过这个调用的是`getAmountsIn`。另一值得关注的是即使现在用的是输入量我们依然可以使用`_swap`。
+## Fixing swap fee bug
+在pair合约中暗藏了一个bug，现在来仔细检查这些代码：
+```solidity
+uint256 balance0 = IERC20(token0).balanceOf(address(this)) - amount0Out;
+uint256 balance1 = IERC20(token1).balanceOf(address(this)) - amount1Out;
+
+if (balance0 * balance1 < uint256(reserve0_) * uint256(reserve1_))
+    revert InvalidK();
+```
+这个检查保障了swap的常量不被打破，但是它没考虑swap费用！😅
+先来仔细分析一下这些代码吧：
+1. 首先我们得到现在pair中的token余额
+2. 从中减去输出量因为我们得把它们发给用户
+3. 最终余额包含输入量（由用户提供）并减去了输出量。但没包含swap费用
+4. 最后计算`k`是否因此而减小
+对`k`的计算只考虑了输入输出量没考虑费用这显然不对。
+为了修复这个问题我们得重写这个函数。
+首先我们对储备进行预检查后，第一件事是把token转给用户。转账完成后，我们将计算输入金额：
+```solidity
+if (amount0Out > 0) _safeTransfer(token0, to, amount0Out);
+if (amount1Out > 0) _safeTransfer(token1, to, amount1Out);
+
+uint256 balance0 = IERC20(token0).balanceOf(address(this));
+uint256 balance1 = IERC20(token1).balanceOf(address(this));
+
+uint256 amount0In = balance0 > reserve0 - amount0Out
+    ? balance0 - (reserve0 - amount0Out)
+    : 0;
+uint256 amount1In = balance1 > reserve1 - amount1Out
+    ? balance1 - (reserve1 - amount1Out)
+    : 0;
+
+if (amount0In == 0 && amount1In == 0) revert InsufficientInputAmount();
+```
+为了方便描述，我们可以认为`reserve0`和`reserve1`是旧余额（swap之前合约的余额）。
+当swap时我们通常提供`amount0Out`或`amount1Out`，由此产生`amount0In`或`amount1In`（另一个将为零）。但是，这部分代码（以及`swap`函数）允许我们同时设置 `amount0Out`和`amount1Out`，因此也有可能`amount0In`和`amount1In`都大于零。但如果它们都为零，则意味着用户没有向合约发送任何代币，这是不被允许的。
+所以接下来的代码会找到新余额：它不包含输出量但包含输入量。
+```solidity
+uint256 balance0Adjusted = (balance0 * 1000) - (amount0In * 3);
+uint256 balance1Adjusted = (balance1 * 1000) - (amount1In * 3);
+
+if (
+    balance0Adjusted * balance1Adjusted <
+    uint256(reserve0_) * uint256(reserve1_) * (1000**2)
+) revert InvalidK();
+```
+首先计算调整后的余额：当前余额减去输入量乘swap费用，然后为调整后的余额计算新的`k`，看`k`的变化是否符合规则。
+```solidity
+function testSwapUnpaidFee() public {
+    token0.transfer(address(pair), 1 ether);
+    token1.transfer(address(pair), 2 ether);
+    pair.mint(address(this));
+
+    token0.transfer(address(pair), 0.1 ether);
+
+    vm.expectRevert(encodeError("InvalidK()"));
+    pair.swap(0, 0.181322178776029827 ether, address(this), "");
+}
+```
+## Flash loans
+flash loans是一个有力的金融工具，在传统金融中我们看不到类似的东西。它是一种无限额且无抵押并必须在同一笔交易中偿还的贷款。Uniswap是提供这种贷款的平台之一，来看看我们怎么在我们的实现中增加flash loan功能。
+flash loan按照以下规则运行：
+1. 智能合约从其他合约中借出flash loan
+2. 出借方合约发送token到期望借款的合约中并调用一个特殊函数
+3. 在特殊函数中借方合约对贷款进行一些操作然后将贷款转回出借方
+4. 出借方合约确保整个贷款完整归还、费用足额支付
+5. 控制权移交给借方合约
+为了实现flash loan我们得对`swap`做出一些改动：
+```solidity
+function swap(
+    uint256 amount0Out,
+    uint256 amount1Out,
+    address to,
+    bytes calldata data
+) public {
+```
+新增一个byte数组类型的`data`参数。下一步是发行贷款：
+```solidity
+...
+if (amount0Out > 0) _safeTransfer(token0, to, amount0Out);
+if (amount1Out > 0) _safeTransfer(token1, to, amount1Out);
+...
+```
+这意味着我们已经支付了由用户索要的任意金额，但没向用户索要任何抵押。我们要做出的唯一改变是让用户能归还贷款。我们通过调用一个用户合约的特殊函数完成这一点：
+```solidity
+...
+if (amount0Out > 0) _safeTransfer(token0, to, amount0Out);
+if (amount1Out > 0) _safeTransfer(token1, to, amount1Out);
+if (data.length > 0) IZuniswapV2Callee(to).zuniswapV2Call(msg.sender, amount0Out, amount1Out, data);
+...
+```
+根据约定，我们期望用户合约实现`zuniswapV2Call`，它接收`msg.sender, amount0Out, amount1Out, data`合约中的其余部分无需更改。
+基本上搞定了，事实证明，我们已经实现了检查贷款是否偿还的逻辑，这与检查新k是否有效的逻辑是相同的！
+现在测试一下flash loan我们希望整体流程在测试后可以变得更清晰。
+如上所述为了使用flash loan我们需要写一个新合约（Flashloaner）。
+```solidity
+contract Flashloaner {
+    error InsufficientFlashLoanAmount();
+
+    uint256 expectedLoanAmount;
+
+    ...
+}
+```
+借出flash loan和进行swap一样简单
+```solidity
+function flashloan(
+    address pairAddress,
+    uint256 amount0Out,
+    uint256 amount1Out,
+    address tokenAddress
+) public {
+    if (amount0Out > 0) {
+        expectedLoanAmount = amount0Out;
+    }
+    if (amount1Out > 0) {
+        expectedLoanAmount = amount1Out;
+    }
+
+    ZuniswapV2Pair(pairAddress).swap(
+        amount0Out,
+        amount1Out,
+        address(this),
+        abi.encode(tokenAddress)
+    );
+}
+```
+在swap之前我们要设置`expectedLoanAmount`，这样我们就可以在稍后检查所要求的token是否已发放给我们。
+在调用swap时可以看到我们把`tokenAddress`作为`data`参数。我们稍后会用这个来偿还贷款。另外我们应当把地址存储为状态变量。由于`data`是字节数组我们需要一种将地址转换为字节的方法，而abi.encode是一种常用的方法。
+```solidity
+function zuniswapV2Call(
+    address sender,
+    uint256 amount0Out,
+    uint256 amount1Out,
+    bytes calldata data
+) public {
+    address tokenAddress = abi.decode(data, (address));
+    uint256 balance = ERC20(tokenAddress).balanceOf(address(this));
+
+    if (balance < expectedLoanAmount) revert InsufficientFlashLoanAmount();
+
+    ERC20(tokenAddress).transfer(msg.sender, balance);
+}
+```
+这个函数将被pair合约在swap函数中调用，`zuniswapV2Call`中我们要确保确实获得了所请求的贷款并偿还。当然偿还前我们可以利用它来做一些事情，比如杠杆、套利或利用智能合约中的漏洞。flash loans是一个有力的工具我们可以用它来实现好的目的当然也能拿来作恶。
+最后，让我们添加一个测试来获取贷款并确保正确的偿还：
+```solidity
+function testFlashloan() public {
+    token0.transfer(address(pair), 1 ether);
+    token1.transfer(address(pair), 2 ether);
+    pair.mint(address(this));
+
+    uint256 flashloanAmount = 0.1 ether;
+    uint256 flashloanFee = (flashloanAmount * 1000) / 997 - flashloanAmount + 1;
+
+    Flashloaner fl = new Flashloaner();
+
+    token1.transfer(address(fl), flashloanFee);
+
+    fl.flashloan(address(pair), 0, flashloanAmount, address(token1));
+
+    assertEq(token1.balanceOf(address(fl)), 0);
+    assertEq(token1.balanceOf(address(pair)), 2 ether + flashloanFee);
+}
+```
+回想一下，我们没有实现任何额外的检查是否偿还了flash loan，我们只是使用了新的k来检查。同样的，当我们归还flash loan时，我们必须支付我们所取的金额+ 0.3%（实际上略高于这个数字：0.3009027%）。
+`Flashloaner`计算``flashloanFee``并偿还了全部金额，在偿还后`flashloanFee`的余额是0，而pair合约得到了利息。
+## Fixing re-entrancy vulnerability
+最后的最后，随着pair合约的改进，我们引入了一个可重入漏洞。我们在此之前曾讨论过：当实现可以外部调用的函数时要非常谨慎可重入的问题，也讨论了CEI是避免被攻击的方法之一。然而在重写`swap`时我们不能使用这种模式因为这个实现迫使我们在外部调用（转移token）前应用状态变更（更新储备）。我们想要乐观转账并且想保持实现的简洁性！所以得运用一种新的保护手段。
+当无法CEI时我们使用[Guard Check](https://fravoll.github.io/solidity-patterns/guard_check.html):我们可以简单的在swap被调用时增加一个标志位，当标志位存在时swap拒绝再次被调用。
+首先添加一个`isEntered`来存储标志位：
+```solidity
+contract ZuniswapV2Pair is ERC20, Math {
+    ...
+    bool private isEntered;
+    ...
+}
+```
+这样做增加了gas消耗，这也是为什么更推荐CEI
+接下来增加一个modifier：
+```solidity
+  modifier nonReentrant() {
+      require(!isEntered);
+      isEntered = true;
+
+      _;
+
+      isEntered = false;
+  }
+```
+* 确保标志位不存在
+* 添加标志位
+* 执行函数体
+* 完成后取消标志位
+最后，我们需要将这个modifier应用到swap中
+```solidity
+function swap(
+    uint256 amount0Out,
+    uint256 amount1Out,
+    address to,
+    bytes calldata data
+) public nonReentrant {
+    ...
+}
+```
+## Conclusion
+我们的旅程到此结束。我衷心希望你享受这段旅程，并在其中中学到很多东西。Uniswap V2 是一个集简洁、优雅和独特于一身的奇妙项目。它的代码是给我们的礼物，它让我们看到，一个真正的去中心化平台和一个完整的 DeFi 解决方案可以通过一套简单而优雅的智能合约来实现——这是每一个Solidity开发者的榜样！
