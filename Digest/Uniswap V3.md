@@ -12,12 +12,12 @@
 ### How Decentralized Exchanges Work
 去中心化交易所也需要流动性。它们还需要有人为各种资产的交易者提供服务。然而，这个过程不能以中心化的方式处理。有多种去中心化的解决方案，实现方式各不相同。我们的重点是Uniswap如何解决这个问题。
 ### Automated Market Makers
-[The evolution of on-chain markets](https://bennyattar.substack.com/p/the-evolution-of-amms)解释了什么是自动做市商（AMM）。顾名思义，这种算法的工作方式与做市商完全相同，但却是自动化的。此外，它是去中心化和无权限的，也就是说：
+[The evolution of on-chain markets](https://bennyattar.substack.com/p/the-evolution-of-amms)解释了什么是自动做市商（AMM）。顾名思义，这种算法的工作方式与做市商完全相同，但它是去中心化且不受预定规则外的因素影响的，也就是说：
 * 不受单一实体管理；
 * 所有资产都不存储在单一位置；
 * 任何人都可以在任何地方使用它。
 #### What Is an AMM?
-AMM是一组智能合约，定义了如何管理流动性。每个交易对（例如ETH/USDC）都是一个单独的合约，存储ETH和USDC，并为交易基础能力：将ETH交换为USDC，反之亦然。
+AMM是一组智能合约，定义了如何管理流动性。每个交易对（例如ETH/USDC）都是一个单独的合约，存储ETH和USDC，并为交易提供基础能力：将ETH换为USDC，反之亦然。
 AMM的核心思想是池化（**pooling**）：每个合约都是一个存储流动性的池，并允许不同用户（包括其他智能合约）以无需许可的方式进行交易。有两个角色，流动性提供者和交易者，这些角色通过流动性池相互作用，它们与池交互的方式是预先设定的，不可变的。
 
 ![[Pasted image 20250214143758.png]]
@@ -180,3 +180,110 @@ $$
 区间。
 
 # Milestone 1. First Swap
+## Introduction
+在这一章中我们将构建pool合约它用来接收流动性和swap token。为了尽可能简单，我们提供的流动性在一个价格区间内且只允许在一个方向上swap。
+在一切就绪后我们要达成的目标是：
+1. 构建一个ETH/USDC池合约。ETH看作$x$，USDC看作$y$
+2. 当前价格设为5000 USDC per 1 ETH
+3. 流动性范围是 4545-5500 USDC per 1 ETH
+4. 从池中购买一些 ETH。此时，由于只有一个价格区间，我们希望交易价格保持在价格区间内
+也就是这样：
+
+![[Pasted image 20250216155601.png]]
+
+在开始代码之前，让我们先弄清楚数学原理并计算所有参数。为了简单起见，我会先在Python中进行数学计算，然后再在Solidity中实现。这样，我们就可以专注于数学计算，而不必深入研究 Solidity中数学的细微差别。这也意味着，在智能合约中，我们将对所有金额进行硬编码。这将使我们能够从一个简单的MVP开始。
+为方便起见，我将所有Python计算都放在[unimath.py](https://github.com/Jeiwan/uniswapv3-code/blob/main/unimath.py)中。
+## Calculating liquidity
+没有流动性就不可能进行交易，为了进行第一次swap，我们需要在合约池中加入一些流动性。关于增加池合约的流动性：
+1. 价格范围。作为LP，我们希望在特定的价格范围内提供流动性，而且只能在这个范围内使用。
+2. 流动性数量，即两个token的数量。我们需要将这些token转入池合约。
+### Price Range Calculation
+回想一下，在Uniswap V3中，整个价格范围被划分为ticks：每个tick对应一个价格和一个索引。在我们的第一个池实现中，我们将以每1个ETH 5000美元的价格购买ETH。购买ETH会从池中移除一定数量的 ETH，并将价格推高至略高于5000美元。我们希望在包括这个价格在内的范围内提供流动性。我们要确保最终价格将**保持在这个范围内**。
+我们将设定当前tick对的价格（5000 USDC/1 ETH）并规定价格的下界($4545)和上界($5500)。
+从前文中我们知道
+
+$$
+\sqrt{P} = \sqrt\frac{y}{x}
+$$
+
+将ETH($x$)、USDC($y$)带入得到：
+
+$$
+\sqrt{P_c}​​=\sqrt\frac{5000​}{1}=\sqrt{5000}​≈70.71
+$$
+
+$$
+\sqrt{P_l}​​=\sqrt\frac{4545}{1}≈67.42
+$$
+
+$$
+\sqrt{P_u}​​=\sqrt\frac{5500​}{1}​≈74.16
+$$
+
+$P_c$是现价，$P_l$是下界，$P_u$是上界。
+现在由这个公式
+
+$$
+\sqrt{p(i)}​=\sqrt{1.0001}^{i}=1.0001^\frac{i}{2}​
+$$
+
+找到对应的tick：
+
+$$
+i=log_\sqrt{1.0001}\sqrt{​​P(i)}​
+$$
+也就是说，
+当前tick：
+
+$$
+i_c​=log_\sqrt{1.0001}​​70.71=85176
+$$
+
+下界tick：
+
+$$
+i_l​=log_\sqrt{1.0001}​​67.42=84222
+$$
+
+上界tick：
+
+$$
+i_u​=log_\sqrt{1.0001}​​74.16=86129
+$$
+
+```python
+import math
+
+def price_to_tick(p):
+    return math.floor(math.log(p, 1.0001))
+
+price_to_tick(5000)
+> 85176
+
+```
+最后需要注意的是，Uniswap使用Q64.96来存储$\sqrt{P}$这是一个定点数，整数部分有 64 位，小数部分有 96 位。在上述计算中，价格是浮点数： 70.71、67.42 和 74.16。我们需要将它们转换成Q64.96。不过这很简单：我们需要将这些数字乘以$2^{96}$(Q是二进制定点数，因此我们需要将小数乘以Q64.96 的基数，即$2^{96}$，我们将得到
+
+$$
+\sqrt{P}_c​​=5602277097478614198912276234240
+$$
+
+$$
+\sqrt{P}_l​​=5314786713428871004159001755648
+$$
+
+$$
+\sqrt{P}_u​​=5875717789736564987741329162240
+$$
+
+```python
+q96 = 2**96
+def price_to_sqrtp(p):
+    return int(math.sqrt(p) * q96)
+
+price_to_sqrtp(5000)
+> 5602277097478614198912276234240
+```
+为了避免损失精度这里是先乘再转换成整数的哦。
+### Token Amounts Calculation
+### Liquidity Amount Calculation
+### Token Amounts Calculation, Again
