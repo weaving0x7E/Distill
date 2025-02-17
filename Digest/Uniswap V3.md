@@ -285,5 +285,155 @@ price_to_sqrtp(5000)
 ```
 为了避免损失精度这里是先乘再转换成整数的哦。
 ### Token Amounts Calculation
+下一步是决定我们要向池存入多少token。答案是想存多少就存多少。我们可以存入购买少量ETH的token，而不会使当前价格离开我们投入流动性的价格范围。在开发和测试期间，我们可以铸造任意数量的token。
+对于第一次swap，我们先存1ETH和5000USDC
 ### Liquidity Amount Calculation
+接下来，我们需要根据我们将存入的金额计算$L$。
+
+$$
+L=\sqrt{xy}​
+$$
+
+但是，这个公式是针对无界曲线的，而我们要将流动性投放到一个有限的价格区间，这个价格区间只是无界曲线的一段。我们需要针对要投入流动性的价格区间计算$L$。我们需要一些更高级的计算。
+要计算一个价格区间的$L$，让我们来看看我们之前讨论过的一个有趣的事实：价格区间可以被耗尽。有可能从一个价格区间买入某token在此区间的总储备，然后只剩下另一个token。
+
+![[Pasted image 20250217095157.png]]
+
+在$a$点和$b$只有一种token：$a$点为ETH，$b$点为USDC。
+我们想要找到一个$L$，使价格可以移动到这两个点在曲线上的任何一个点。我们希望有足够的流动性，使价格达到价格区间的任何一个边界。因此，我们希望根据$Δx$和$Δy$的最大值来计算$L$。
+如图所示，当从池中购买ETH时，价格在上涨；当买USDC时，价格就会下降。价格是$\frac{y}{x}$因此，在点$a$，价格是范围内最低的；在点$b$，价格最高。
+现在，将上图中的曲线分成两段：一段在起点的左边，一段在起点的右边。我们要计算两个$L$，每段一个。因为在swap过程中，价格会向任一方向移动：要么增长，要么下降。要使价格移动，只需任一token即可：
+1. 当价格上涨时，swap只需要token $x$（我们正在购买token $x$，所以我们只想从池中取出token $x$）；
+2. 当价格下跌时，swap只需要token $y$。
+因此，当前价格左侧曲线段的流动性仅由token $x$组成，并且仅根据提供的token $x$的数量计算。同样，当前价格右侧曲线段的流动性仅由token $y$组成，并且仅根据提供token $y$的数量计算。
+
+![[Pasted image 20250217100322.png]]
+
+这就是为什么在提供流动性时，我们要计算两个$L$，然后选择其中之一。选哪个呢？较小的那个。因为大的那个已经包含了小的那个！我们希望新的流动性沿着曲线均匀分布，因此我们希望在当前价格的左侧和右侧添加相同的$L$。如果我们选择较大的那个，用户就需要提供更多的流动性来弥补较小那个的不足。这当然是可行的，但这会使智能合约变得更加复杂。
+最后要注意的是：**新的流动性不能改变当前的价格**。也就是说，它必须与当前的储备比例成正比。这就是为什么两个$L$可以是不同的——当比例没有保持不变的时候。我们选择小$L$来重建比例。
+希望在代码实现后，这些规则可以更明晰！现在，让我们回顾一下$Δx$和$Δy$ 是如何计算的：
+
+$$
+Δx=Δ\frac{​1}{P}​L
+$$
+
+$$
+Δy=Δ\sqrt{P​}L
+$$
+
+我们可以用实际价格代替$ΔP$，从而扩展这些公式
+
+$$
+Δx=(\frac{​​1}{\sqrt{P_c}}​−\frac{​​1}{\sqrt{P_b​}​}​)L
+$$
+
+$$
+Δy=(\sqrt{P_c}​​−\sqrt{P_a}​​)L
+$$
+
+$P_a$是$a$点的价格，$P_b$是$b$点的价格，$P_c$是现价。注意，由于价格公式为$\frac{y}{x}$（以$y$计价）那自然它在$a$、$b$之间，从公式1中推出$L$：
+
+$$
+Δx=(\frac{1}{\sqrt{P_c}}​​−\frac{1}{\sqrt{P_b}}​​​)L​​​
+$$
+
+$$
+Δx=\frac{L}{\sqrt{P_c}}​​​−\frac{L}{\sqrt{P_b}}​​​
+$$
+
+$$
+​Δx=\frac{L​(P_b​​−P_c​​)}{\sqrt{P_b}\sqrt{​​P_c}}
+$$
+
+$$
+​L=Δx\frac{​​\sqrt{P_b}\sqrt{​​P_c}}{\sqrt{P_b}​​−\sqrt{P_c}}
+$$
+
+从公式2中推出$L$
+
+$$
+Δy=(\sqrt{P_c}​​−\sqrt{P_a}​​)L
+$$
+
+$$
+L=\frac{Δy}{\sqrt{P_c}​​−\sqrt{P_a}}
+$$
+
+将价格带入$L$
+
+$$
+L=Δx\frac{​​P_b​​P_c}{P_b​​−P_c}​​​=1 ETH∗\frac{5875…∗5602…​}{5875…−5602…}
+$$
+
+转成Q64.96后得到
+
+$$
+L=1519437308014769733632
+$$
+
+同样的价格带到另一个$L$
+
+$$
+L=\frac{​Δy}{P_c​−P_a}​=\frac{5000USDC}{5602…−5314…}
+$$
+
+$$
+​L=1517882343751509868544
+$$
+
+在这两个$L$中我们选择较小的那个。
+```python
+sqrtp_low = price_to_sqrtp(4545)
+sqrtp_cur = price_to_sqrtp(5000)
+sqrtp_upp = price_to_sqrtp(5500)
+
+def liquidity0(amount, pa, pb):
+    if pa > pb:
+        pa, pb = pb, pa
+    return (amount * (pa * pb) / q96) / (pb - pa)
+
+def liquidity1(amount, pa, pb):
+    if pa > pb:
+        pa, pb = pb, pa
+    return amount * q96 / (pb - pa)
+
+eth = 10**18
+amount_eth = 1 * eth
+amount_usdc = 5000 * eth
+
+liq0 = liquidity0(amount_eth, sqrtp_cur, sqrtp_upp)
+liq1 = liquidity1(amount_usdc, sqrtp_cur, sqrtp_low)
+liq = int(min(liq0, liq1))
+> 1517882343751509868544
+
+```
 ### Token Amounts Calculation, Again
+由于流动性数量需要沿着我们存入的价格区间曲线均匀分布。因此，即使用户选择了数量，合约也需要重新计算，实际数量会略有不同（至少因为四舍五入的原因）。
+借用公式：
+
+$$
+Δx=\frac{L}{\sqrt{P_c}}​​​−\frac{L}{\sqrt{P_b}}​​​
+$$
+
+$$
+Δy=(\sqrt{P_c}​​−\sqrt{P_a}​​)L
+$$
+```python
+def calc_amount0(liq, pa, pb):
+    if pa > pb:
+        pa, pb = pb, pa
+    return int(liq * q96 * (pb - pa) / pa / pb)
+
+
+def calc_amount1(liq, pa, pb):
+    if pa > pb:
+        pa, pb = pb, pa
+    return int(liq * (pb - pa) / q96)
+
+amount0 = calc_amount0(liq, sqrtp_upp, sqrtp_cur)
+amount1 = calc_amount1(liq, sqrtp_low, sqrtp_cur)
+(amount0, amount1)
+> (998976618347425408, 5000000000000000000000)
+//这些数字与我们希望提供的数额接近，但ETH的数额略小
+
+```
