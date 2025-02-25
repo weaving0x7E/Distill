@@ -12,9 +12,8 @@ Content of this article is licensed under a [Creative Commons Attribution-NonCo
 截至2021年6月共推出过三个版本的Uniswap。第一个版本于2018年推出允许换ether和其他token，还可以进行chained swap，以实现token与token之间的交换。V2于2020年三月推出相比于V1它允许ERC20之间直接交换，当然也允许用chained swap交换任意token。V3于2021年五月推出本次升级极大的提升了资本利用率它允许LP从资金池中取出更大比例的流动性，同时仍能获得同样的回报。在本系列中我们将深入每个版本并从零开始构建一个简单版本的Uniswap。
 
 ## What is Uniswap
-简单的说Uniswap是一个去中心化交易所（DEX）它的目的时提供一个中心化交易所的替代方案。它在Ethereum上运行并且是完全依赖代码本身来运转的，没有任何人能在这套机制中有任何特权。
-在。
-它底层依赖一套算法能允许建立pool或token pairs为其提供流动性使得用户可以利用这种流动性来交换token，这种算法被称为自动做市商(automated market maker)或者LP。
+简单的说Uniswap是一个去中心化交易所（DEX）它的目的是提供一个中心化交易所的替代方案。它在Ethereum上运行并且是完全依赖代码本身来运转的，没有任何人能在这套机制中有任何特权。
+它底层依赖一套建立pool或token pairs的机制以为其提供流动性，使得用户可以利用这种流动性来交换token，这种算法被称为自动做市商(automated market maker)。
 做市商是提供流动性的实体，有了流动性才有交易的可能，如果你想售出商品但没人买，那交易自然无法达成。有些交易对有高流动性比如BTC-USDT但是也有些币对没啥流动性。
 一个DEX必须有足够的流动新以实现中心化交易所的职能，一个获得流动性的方法是把DEX自己的资金投入其中成为做市商。但这不太现实因为这得为每个币对提供巨量的流动性，此外这将让DEX变得中心化，如果市场上只有一个做市商那没人能保证它不作恶。
 一个更好的方案是允许任意人成为做市商，这就是Uniswap在做的事，任何用户可以存入他们自己的资金到交易对中并从中获益。
@@ -29,7 +28,7 @@ $$
 x∗y=k
 $$
 
-x是ether储备y是token储备k是常量。Uniswap需要k保持恒定无论x与y的储备如何。当你用ether交易其他币对时你存入ether到合约中并得到一定数量的token。Uniswap确保在交换后k不变（但这也不绝对）。这个公式也负责价格计算，下文将详述这一机制。
+$x$是ether储备$y$是token储备$k$是常量。Uniswap需要$k$保持恒定无论$x$与$y$的储备如何。当你用ether交易其他token时你，存入ether到合约中并得到一定数量的token。Uniswap确保在交换后$k$不变（但这也不绝对）。这个公式也负责价格计算，下文将详述这一机制。
 
 ## Token contract
 ```solidity
@@ -105,13 +104,13 @@ describe("addLiquidity", async () => {
 ```
 
 ### Pricing function
-现在我们想一下如何计算交换价格，一个朴素的想法也许是这样直接把价格和储备挂钩
+现在我们想一下如何计算swap价格，一个朴素的想法也许是这样直接把价格和储备挂钩
 
 $$
 P_X​=\frac{x}{y}​,P_Y​=\frac{y}{x}​
 $$
 
-这有点道理因为exchange合约不和中心化交易所或者任何外部价格预言机交互，所以它不可能知道正确的价格，所以exchange合约本身就应当是一个价格预言机。它只能利用ether和token储备，这是我们计算价格的唯一信息。
+这有点道理因为exchange合约不和中心化交易所或者任何外部价格预言机交互，因此它不可能知道正确的价格，所以exchange合约本身就应当是一个价格预言机。它只能利用ether和token储备，这是我们计算价格的唯一信息。
 由此写一个价格函数吧：
 ```solidity
 function getPrice(uint256 inputReserve, uint256 outputReserve)
@@ -145,7 +144,7 @@ describe("getPrice", async () => {
 });
 ```
 我们存入2000 token和1000 ether，期待token的价格是0.5 ether，ether的价格是2 token。然而这个测试失败了，它显示从exchange中获得了0 ether，Why？
-原因是solidity只支持近似的整数除法0.5被近似成了0，让我们增加精度来修复这个问题吧：
+原因是solidity中没有小数0.5被近似成了0，让我们增加精度来修复这个问题吧：
 ```solidity
 function getPrice(uint256 inputReserve, uint256 outputReserve)
   public
@@ -168,7 +167,7 @@ expect(await exchange.getPrice(tokenReserve, etherReserve)).to.eq(2000);
 现在1 token等于0.5 ether而1 ether 等于2 token了。
 看起来好像什么问题，但是如果我们用2000 token来换取ether呢？我们会得到1000 ether，这将用尽exchange合约里的全部储备。
 显然这个价格函数有点古怪，它竟然允许用尽合约储备这是我们不想看到的。
-原因在于价格函数遵从恒等式它定义了`k`是个`x`与`y`的常数和，这种函数是一条直线
+原因在于价格函数遵从恒等式它定义了$k$是个$x$与$y$的常数和，这种函数是一条直线
 
 ![[Pasted image 20250127161859.png]]
 
@@ -249,8 +248,8 @@ describe("getEthAmount", async () => {
 
 ![[Pasted image 20250127163807.png]]
 
-双曲线和x与y轴不会相加自然储备也不会是0，这意味着储备是无限的！
-不难看出价格函数会动态滑点，单笔交易越大滑点越明显。从测试中可以看到我们的交易所得比预期的要少一些，这似乎是恒定乘积做市商的一个缺点，然而这个机制保护了交易池不会被耗尽，这也符合供需关系，越紧俏的资产价格越高。
+双曲线和x与y轴不会相交自然储备也不会是0！
+不难看出价格函数会滑点，单笔交易越大滑点越明显。从测试中可以看到我们的交易所得比预期的要少一些，这似乎是恒定乘积做市商的一个缺点，但这个机制保护了交易池不会被耗尽，这也符合供需关系，越紧俏的资产价格越高。
 再写一个测试看看滑点对价格的影响吧
 ```javascript
 describe("getTokenAmount", async () => {
@@ -339,7 +338,7 @@ function addLiquidity(uint256 _tokenAmount) public payable {
   token.transferFrom(msg.sender, address(this), _tokenAmount);
 }
 ```
-你能看它有什么问题吗？
+你能看出它有什么问题吗？
 这个函数允许在任何时刻提供任意数量的流动性，正如我们所熟知的那样价格是以资产比例来计算的：
 
 $$
@@ -389,7 +388,7 @@ LP-tokens基本上是向流动性提供者发行的 ERC20 token，以换取他�
 2. 以太坊上的写操作（如在合约中存储新数据或更新现有数据）非常昂贵。因此，我们希望降低 LP-tokens的维护成本（即我们不想运行定期重新计算和更新份额）
 想象一下我们铸造了很多token并把他们提供给LP。如果我们总是分发所有token，那就得不停的铸造还得不停的重新计算大家的份额，那假如只释放初始token的一部分，同样有可能把token都用光导致还得重新计算份额。
 所以提供无限量token，在新流动性加入后就铸造新token才是王道。现在我们得想一个优雅的公式能让大家的份额在这种情况下也一直保持正确。
-所以，该咋办嘞？
+那么，该咋办嘞？
 exchange合约存储了ether和token，所以我们应该基于它们的储备来计算。。。或者只根据它们中的一个来计算，我也不知道。Uniswap V1根据ether来计算的，但是V2版本允许了token之间的交易，所以该如何选择其实没有明确的参照。让我们继续讨论Uniswap V1的功能，稍后我们将看到当有两个ERC20时如何解决这个问题。
 这个公式表示新LP-tokens数量是如何根据存入的ether来计算的：
 
@@ -444,7 +443,7 @@ function addLiquidity(uint256 _tokenAmount)
 * 如何根据比例给LP提供激励
 同样，这看似是一项艰巨的任务，但我们已经具备了解决它的一切条件。
 让我们思考一下最后两个问题。我们可以引入一种额外的付款方式，与交易一起发送。这些款项会被累积到一个基金中，任何流动性提供者都可以从中提取与其份额成正比的金额。这听起来是个合理的想法，而且令人惊讶的是，它几乎已经实现了：
-1. 交易者已经发送了ether/tokens到exchange合约，为了收费我们可以直接从合约中提取他们提供的流动性
+1. 交易者已经发送了ether/tokens到exchange合约，为了收费我们可以直接从合约中提取它们提供的流动性
 2. 我们的基金就是exchange合约中的储备，它可以用于累积费用，这也意味着储备将会随着时间的推移而增长，所以恒定乘积公式并不是那么恒定！然而，这并不能使它失效；和储备相比费用很小，而且没有办法操纵它来显著改变储备。
 3. 现在我们需要回答第一个问题，LP应当按比例获得ether和token以及与LP-tokens成比例的累积费用
 Uniswap的费用是0.3%，我们采用1%的比例以方便后续的测试。
@@ -623,7 +622,7 @@ IERC20(tokenAddress).transferFrom(
     _tokensSold
 );
 ```
-最后一步时使用其他exchange来用ether换回token
+最后一步是使用其他exchange来用ether换回token
 ```solidity
 IExchange(exchangeAddress).ethToTokenSwap{value: ethBought}(
     _minTokensBought
