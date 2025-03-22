@@ -18,11 +18,12 @@ Uniswap是一个运行于以太坊的去中心化交易所。它是完全自动�
 值得注意的是，2020年Uniswap V2发布以后，许多机制都发生了变化。例如Solidity 0.8引入溢出检查`SafeMath`就显得没那么重要了。所以我们要构建的是一个更现代化的Uniswap。
 
 ## Architecture of Uniswap V2
-Uniswap V2的核心思想是池（pooling）：LP可以把流动性质押到合约中，质押后的流动性允许以任何人以去中心化的方式进行交易，类似于Uniswap V1交易者要支付一笔小费，它也会存入合约由LP共享。
+Uniswap V2的核心思想是池化（pooling）：LP可以把流动性质押到合约中，质押后的流动性允许以任何人以去中心化的方式进行交易，类似于Uniswap V1交易者要支付一笔小费，它也会存入合约由LP共享。
 Uniswap V2中的核心合约是[UniswapV2Pair](https://github.com/Uniswap/v2-core/blob/master/contracts/UniswapV2Pair.sol)。“Pair”和“Pool”以一对同义的术语，它们都代表`UniswapV2Pair`合约。这个合约用于接收用户的token，并使用累积的token提供交换服务。这就是为什么称它为pool。每个`UniswapV2Pair`合约只能池化一对token，并允许在这两个token间互换，这就是为什么它也可以称为pair。
 Uniswap V2的代码库被分成两个repo
 * [core](https://github.com/Uniswap/v2-core)
 * [periphery](https://github.com/Uniswap/v2-periphery)
+
 core中包含这些合约：
 1. `UniswapV2ERC20`: 为LP-tokens提供扩展的ERC20实现，它还实现了EIP-2612来支持离链转账
 2. `UniswapV2Factory`: 类似于V1的factory合约它负责创建pair合约并注册。注册器使用`create2`来生成pair地址，我们接下来会展示相应实现细节
@@ -46,7 +47,7 @@ contract ZuniswapV2Pair is ERC20, Math {
   ...
 }
 ```
-如果你熟悉[[Uniswap V1]]，你也许记得我们实现了`addLiquidity`函数它计量了新加入的流动性并铸造LP-token。Uniswap V2在periphery合约中用`UniswapV2Router`实现了相同的功能。在pair合约中这些功能以一种更底层的方式被实现：流动性管理被简单的视为对LP-token的管理。当你向pair中增加流动性时合约会铸造LP-token。当你收回流动性时LP-token被销毁。就像之前谈论的那样core合约是一个底层合约它只负责最核心的操作。
+如果你熟悉[[Uniswap V1]]，你也许记得我们实现了`addLiquidity`函数它计量了新加入的流动性并铸造LP-token。Uniswap V2在periphery合约中用`UniswapV2Router`实现了相同的功能。在pair合约中这些功能以一种更底层的方式被实现：流动性管理被简单的视为对LP-token的管理。当你向pair中增加流动性时合约会铸造LP-token。当你收回流动性时LP-token被销毁。就像之前讨论的那样core合约是一个底层合约它只负责最核心的操作。
 以下是存入流动性的底层函数：
 ```solidity
 function mint() public {
@@ -85,6 +86,7 @@ $$
 现在让我们看看对于已有流动性的池LP-token该如何计算，显然这种算法要满足两个条件：
 1. 与存入的资产成比例
 2. 与已发行的LP-token成比例
+
 回忆一下V1中的公式：
 
 $$
@@ -104,7 +106,7 @@ if (totalSupply == 0) {
    );
 }
 ```
-在第一个分支中我们减去`MINIMUM_LIQUIDITY`（1000或1e<sup>-15</sup>)，当提供初始流动性时它避免小LP使得池的份额（1e<sup>-18</sup>, 1 wei）过贵，对于大多数池来说1000wei的LP-token可以忽略不计但如果有人想让池中每share（LP-token）的价格过贵那他必须支付1000倍的成本。
+在第一个分支中我们减去`MINIMUM_LIQUIDITY`（$1000$或$1e^{-15}$)，当提供初始流动性时它避免小LP使得池的份额（$1e^{-18}$, 1 wei）过贵，对于大多数池来说1000wei的LP-token可以忽略不计但如果有人想让池中每share（LP-token）的价格过贵那他必须支付1000倍的成本。
 ## Writing tests in Solidity
 ```solidity
 contract ZuniswapV2PairTest is Test {
@@ -294,6 +296,7 @@ function testBurnUnbalancedDifferentUsers() public {
 像我在介绍中提到的pair合约是核心合约，它必须尽可能的底层且精简。它也影响着我们如何向合约中发送token，转移token给某人有两种方式：
 1. 通过token的`transfer`方法，指定接收方和要发送的金额
 2. 通过`approve`方法允许其他用户或合约来接收你账户中的token到他的地址，另一种方式是调用`transferFrom`来获得你的token，由另一方为转账付费，你只需要批准数量。
+
 这种审批模式在ETH应用中非常常见：为了避免一次又一次的调用`approve`，dapps往往向用户申请最大的token额度。但这个不是我们现在要关注的，现在我们依然采用手工转账到pair合约的方式。😂
 这个函数接受两个输出金额，每token对应一个，代表调用方想要换得的token数量。之所以这样做是因为我们不想强制指定交换的方向，调用方可以指定其中一个或者两个的数量，我们只执行必要的检查。
 ```solidity
@@ -364,6 +367,7 @@ $$
 	具体的方法当函数被调用时设置一个标志位，当标志位存在时不允许调用该函数，当调用完成时取消标志位。这种机制不允许函数在调用过程中又被调用。
 2. 遵循CEI原则
 	这个原则强制执行时遵循一个严格的操作顺序：首先，所有必要的检查要在函数真正执行前进行，第二，函数根据其逻辑正常更新其状态。最后函数调用外部函数。这样操作顺序保证了每一个函数调用都是在函数状态最终确定且正确的状态下进行的。
+	
 我们的`swap`有漏洞吗？能否让它把所有的储备都发给调用方？理论上可以，因为它依赖第三方合约（token）任何一个token合约都可以向它提供错误的余额，以欺骗它将所有储备发送给调用者。当然如果token合约本身就是恶意的话，那可重入攻击相比之下就显得微不足道了。
 ## Price oracle
 预言机是连接区块链和线下服务的桥梁，让智能合约可以查询真实世界的数据，这也想法已经存在了很长时间，Chainlink是最大的预言机网络之一，于2017年建立也是很多DeFi程序的关键依赖。
@@ -1252,4 +1256,4 @@ function swap(
 }
 ```
 ## Conclusion
-我们的旅程到此结束。我衷心希望你享受这段旅程，并在其中中学到很多东西。Uniswap V2 是一个集简洁、优雅和独特于一身的奇妙项目。它的代码是给我们的礼物，它让我们看到，一个真正的去中心化平台和一个完整的 DeFi 解决方案可以通过一套简单而优雅的智能合约来实现——这是每一个Solidity开发者的榜样！
+我们的旅程到此结束。我衷心希望你享受这段旅程，并在其中学到很多东西。Uniswap V2 是一个集简洁、优雅和独特于一身的奇妙项目。它的代码是给我们的礼物，它让我们看到，一个真正的去中心化平台和一个完整的 DeFi 解决方案可以通过一套简单而优雅的智能合约来实现——这是每一个Solidity开发者的榜样！
